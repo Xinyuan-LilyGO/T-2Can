@@ -2,7 +2,7 @@
  * @Description: None
  * @Author: LILYGO_L
  * @Date: 2023-09-11 16:13:14
- * @LastEditTime: 2025-07-07 15:09:54
+ * @LastEditTime: 2025-07-07 15:13:01
  * @License: GPL 3.0
 -->
 <h1 align = "center">T-2Can</h1>
@@ -62,7 +62,7 @@ T-2Can is a board developed based on the ESP32-S3 chip, featuring two CAN buses.
 | Example | `[Platformio IDE][espressif32-v6.5.0]`<br />`[Arduino IDE][esp32_v2.0.14]` | Description | Picture |
 | ------  | ------ | ------ | ------ | 
 | [can](./examples/can) |  <p align="center">![alt text][supported] | | |
-| [Original_Test](./examples/original_test) |  <p align="center">![alt text][supported] | factory example | |
+| [original_test](./examples/original_test) |  <p align="center">![alt text][supported] | factory example | |
 
 [supported]: https://img.shields.io/badge/-supported-green "example"
 
