@@ -2,7 +2,7 @@
  * @Description: None
  * @Author: LILYGO_L
  * @Date: 2023-09-11 16:13:14
- * @LastEditTime: 2025-07-07 15:13:01
+ * @LastEditTime: 2025-07-29 15:55:30
  * @License: GPL 3.0
 -->
 <h1 align = "center">T-2Can</h1>
@@ -154,5 +154,5 @@ For pin definitions, please refer to the configuration file: [pin_config.h](./li
 * A. Please hold down the "BOOT-0" button and try downloading the program again.
 
 ## Project
-<!-- * [T-2Can_V1.0](./project/T-2Can_V1.0.pdf) -->
+* [T-2Can_V1.0](./project/T-2Can_V1.0.pdf)
 

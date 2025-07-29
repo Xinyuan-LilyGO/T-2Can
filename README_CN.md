@@ -154,4 +154,4 @@ T-2Can是基于esp32s3芯片开发的，有两个can总线的板子。
 * A. 请按住“BOOT-0”按键重新下载程序。
 
 ## 项目
-<!-- * [T-2Can_V1.0](./project/T-2Can_V1.0.pdf) -->
+* [T-2Can_V1.0](./project/T-2Can_V1.0.pdf)
