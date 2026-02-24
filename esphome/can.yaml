@@ -1,0 +1,104 @@
+esphome:
+  name: can
+  # 在系统启动时执行硬件复位逻辑
+  on_boot:
+    priority: 800.0 # 极高优先级，在所有传感器初始化前执行
+    then:
+      - logger.log: "Resetting MCP2515..."
+      - output.turn_on: mcp_rst_pin  # 拉高
+      - delay: 100ms
+      - output.turn_off: mcp_rst_pin # 拉低
+      - delay: 100ms
+      - output.turn_on: mcp_rst_pin  # 恢复高电平
+      - delay: 100ms
+
+esp32:
+  board: esp32-s3-devkitm-1
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+
+api:
+  port: 6053
+  batch_delay: 50ms  # Reduce latency for real-time applications
+  listen_backlog: 2  # Allow 2 pending connections in queue
+  max_connections: 6  # Allow up to 6 simultaneous connections
+  max_send_queue: 10  # Maximum queued messages per connection before disconnect
+
+wifi:
+  ssid: LilyGo-AABB
+  password: xinyuandianzi
+
+# 定义复位引脚输出
+output:
+  - platform: gpio
+    pin: GPIO9
+    id: mcp_rst_pin
+
+# SPI 配置 (MCP2515 使用)
+spi:
+  clk_pin: GPIO12
+  mosi_pin: GPIO11
+  miso_pin: GPIO13
+
+canbus:
+  # 1. ESP32-S3 内置 CAN (TWAI)
+  - platform: esp32_can
+    id: internal_can
+    tx_pin: GPIO7
+    rx_pin: GPIO6
+    can_id: 0x100
+    bit_rate: 250kbps
+    on_frame:
+      - can_id: 0x200 # 监听来自 MCP2515 的数据
+        then:
+          - lambda: |-
+              id(rx_display_internal).publish_state("From MCP: " + format_hex_pretty(x));
+              ESP_LOGI("CAN", "Internal CAN receive: %s", format_hex_pretty(x).c_str());
+
+  # 2. MCP2515 外置 CAN
+  - platform: mcp2515
+    setup_priority: -100.0
+    id: external_can
+    cs_pin: GPIO10
+    can_id: 0x200
+    bit_rate: 250kbps
+    clock: 16MHz
+    mode: NORMAL
+    on_frame:
+      - can_id: 0x100 # 监听来自 Internal CAN 的数据
+        then:
+          - lambda: |-
+              id(rx_display_mcp).publish_state("From Internal: " + format_hex_pretty(x));
+              ESP_LOGI("CAN", "MCP2515 receive: %s", format_hex_pretty(x).c_str());
+
+# 控制按钮：用于触发发送
+button:
+  - platform: template
+    name: "Send: Internal -> MCP"
+    icon: "mdi:arrow-right-bold"
+    on_press:
+      - canbus.send:
+          canbus_id: internal_can
+          can_id: 0x100
+          data: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+
+  - platform: template
+    name: "Send: MCP -> Internal"
+    icon: "mdi:arrow-left-bold"
+    on_press:
+      - canbus.send:
+          canbus_id: external_can
+          can_id: 0x200
+          data: [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
+
+# 状态显示：在 Home Assistant Dashboard 查看结果
+text_sensor:
+  - platform: template
+    name: "Internal CAN Rx Status"
+    id: rx_display_internal
+  - platform: template
+    name: "MCP2515 Rx Status"
+    id: rx_display_mcp
