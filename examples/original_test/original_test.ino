@@ -2,27 +2,44 @@
  * @Description: original_test
  * @Author: LILYGO_L
  * @Date: 2024-11-07 10:04:14
- * @LastEditTime: 2025-07-07 14:54:46
+ * @LastEditTime: 2026-04-10 15:35:47
  * @License: GPL 3.0
  */
 
 #include <Arduino.h>
 #include "driver/twai.h"
 #include "pin_config.h"
+#if defined T_2Can
 #include "mcp2515.h"
+#elif defined T_2Can_Fd
+#include "mcp2518fd_can.h"
+#else
+#error "no macro definition is set"
+#endif
 #include <SPI.h>
 #include "WiFi.h"
 #include <HTTPClient.h>
 
 // Intervall:
-#define POLLING_RATE_MS 1000
+#define POLLING_RATE_MS 100
 
-#define WIFI_SSID "xinyuandianzi"
-#define WIFI_PASSWORD "AA15994823428"
-// #define WIFI_SSID "LilyGo-AABB"
-// #define WIFI_PASSWORD "xinyuandianzi"
+// #define WIFI_SSID "xinyuandianzi"
+// #define WIFI_PASSWORD "AA15994823428"
+#define WIFI_SSID "LilyGo-AABB"
+#define WIFI_PASSWORD "xinyuandianzi"
 
 #define WIFI_CONNECT_WAIT_MAX 5000
+
+#if defined T_2Can
+#elif defined T_2Can_Fd
+#define MAX_DATA_SIZE 64
+#else
+#error "no macro definition is set"
+#endif
+
+#define SOFTWARE_NAME "Original_Test"
+#define SOFTWARE_LASTEDITTIME "202604101527"
+#define BOARD_VERSION "V1.0"
 
 size_t CycleTime = 0;
 
@@ -30,14 +47,23 @@ uint64_t Can_Count = 0;
 
 bool Can_A_B_Send_Flag = true;
 
-const char *fileDownloadUrl = "https://freetyst.nf.migu.cn/public/product9th/product45/2022/05/0716/2018%E5%B9%B409%E6%9C%8812%E6%97%A510%E7%82%B943%E5%88%86%E7%B4%A7%E6%80%A5%E5%86%85%E5%AE%B9%E5%87%86%E5%85%A5%E5%8D%8E%E7%BA%B3179%E9%A6%96/%E6%A0%87%E6%B8%85%E9%AB%98%E6%B8%85/MP3_128_16_Stero/6005751EPFG164228.mp3?channelid=02&msisdn=d43a7dcc-8498-461b-ba22-3205e9b6aa82&Tim=1728484238063&Key=0442fa065dacda7c";
+const char *fileDownloadUrl = "https://cd001.www.duba.net/duba/install/packages/ever/kinsthomeui_150_15.exe";
 
 static bool Wifi_Connection_Flag = false;
 
+#if defined T_2Can
 struct can_frame Can_Receive_Package;
 struct can_frame Can_Send_Package;
 
 MCP2515 Can_A(MCP2515_CS, 10000000, &SPI);
+#elif defined T_2Can_Fd
+uint8_t Can_Receive_Package[MAX_DATA_SIZE];
+uint8_t Can_Send_Package[MAX_DATA_SIZE];
+
+mcp2518fd Can_A(MCP2518_CS);
+#else
+#error "no macro definition is set"
+#endif
 
 void Can_B_Drive_Initialization()
 {
@@ -330,7 +356,21 @@ void setup()
 {
     Serial.begin(115200);
     Serial.println("Ciallo");
+#if defined T_2Can
+    Serial.println("[T_2Can_" + (String)BOARD_VERSION "][" + (String)SOFTWARE_NAME +
+                   "]_firmware_" + (String)SOFTWARE_LASTEDITTIME);
 
+#elif defined T_2Can_Fd
+    Serial.println("[T_2Can_Fd_" + (String)BOARD_VERSION "][" + (String)SOFTWARE_NAME +
+                   "]_firmware_" + (String)SOFTWARE_LASTEDITTIME);
+#else
+#error "no macro definition is set"
+#endif
+
+    Wifi_STA_Test();
+    WIFI_STA_Test_Loop();
+
+#if defined T_2Can
     Can_Send_Package.can_id = 0xAA;
     Can_Send_Package.can_dlc = 8;
     Can_Send_Package.data[0] = 8;
@@ -342,8 +382,6 @@ void setup()
     Can_Send_Package.data[6] = 2;
     Can_Send_Package.data[7] = 1;
 
-    Can_B_Drive_Initialization();
-
     pinMode(MCP2515_RST, OUTPUT);
     digitalWrite(MCP2515_RST, HIGH);
     delay(100);
@@ -353,14 +391,35 @@ void setup()
     delay(100);
 
     SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS); // SPI boots
+
     Can_A.reset();
     Can_A.setBitrate(CAN_500KBPS);
     Can_A.setNormalMode();
 
-    Wifi_STA_Test();
-    WIFI_STA_Test_Loop();
+    Serial.println("can a speed: 1000kbps");
 
-    Serial.println("can a speed: 500kbps");
+#elif defined T_2Can_Fd
+    memset(Can_Send_Package, 'A', MAX_DATA_SIZE);
+
+    Can_A.setMode(CAN_NORMAL_MODE);
+
+    SPI.begin(MCP2518_SCLK, MCP2518_MISO, MCP2518_MOSI, MCP2518_CS); // SPI boots
+
+    if (Can_A.begin(CAN_500K_5M) != CAN_OK)
+    {
+        Serial.println("can a fd init fail");
+    }
+    else
+    {
+        Serial.println("can a fd init success");
+    }
+
+    Serial.println("can a fd speed: 5000kbps");
+#else
+#error "no macro definition is set"
+#endif
+
+    Can_B_Drive_Initialization();
     Serial.println("can b speed: 500kbps");
 }
 
@@ -370,96 +429,97 @@ void loop()
     uint32_t alerts_triggered;
     twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(POLLING_RATE_MS));
     // 总线状态信息
-    twai_status_info_t twai_status_info;
-    twai_get_status_info(&twai_status_info);
+    // twai_status_info_t twai_status_info;
+    // twai_get_status_info(&twai_status_info);
 
-    switch (alerts_triggered)
-    {
-    case TWAI_ALERT_ERR_PASS:
-        Serial.println("\ncan b: Alert: TWAI controller has become error passive.");
-        delay(1000);
-        break;
-    case TWAI_ALERT_BUS_ERROR:
-    {
-        Serial.println("\ncan b: Alert: A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus.");
-        Serial.printf("can b: Bus error count: %d\n", twai_status_info.bus_error_count);
+    // switch (alerts_triggered)
+    // {
+    // case TWAI_ALERT_ERR_PASS:
+    //     Serial.println("\ncan b: Alert: TWAI controller has become error passive.");
+    //     delay(1000);
+    //     break;
+    // case TWAI_ALERT_BUS_ERROR:
+    // {
+    //     Serial.println("\ncan b: Alert: A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus.");
+    //     Serial.printf("can b: Bus error count: %d\n", twai_status_info.bus_error_count);
 
-        uint8_t temp = 0;
-        while (1)
-        {
-            uint32_t alerts_triggered;
-            twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(POLLING_RATE_MS));
-            // 总线状态信息
-            twai_status_info_t twai_status_info;
-            twai_get_status_info(&twai_status_info);
+    //     uint8_t temp = 0;
+    //     while (1)
+    //     {
+    //         uint32_t alerts_triggered;
+    //         twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(POLLING_RATE_MS));
+    //         // 总线状态信息
+    //         twai_status_info_t twai_status_info;
+    //         twai_get_status_info(&twai_status_info);
 
-            temp++;
-            if (temp > 3)
-            {
-                break;
-            }
+    //         temp++;
+    //         if (temp > 3)
+    //         {
+    //             break;
+    //         }
 
-            delay(1000);
-        }
-    }
-    break;
-    case TWAI_ALERT_TX_FAILED:
-        Serial.println("\ncan b: Alert: The Transmission failed.");
-        Serial.printf("can b: TX buffered: %d\n", twai_status_info.msgs_to_tx);
-        Serial.printf("can b: TX error: %d\n", twai_status_info.tx_error_counter);
-        Serial.printf("can b: TX failed: %d\n", twai_status_info.tx_failed_count);
-        delay(1000);
-        break;
-    case TWAI_ALERT_TX_SUCCESS:
-        Serial.println("\ncan b: Alert: The Transmission was successful.");
-        Serial.printf("can b: TX buffered: %d\n", twai_status_info.msgs_to_tx);
-        break;
-    case TWAI_ALERT_RX_QUEUE_FULL:
-        Serial.println("\ncan b: Alert: The RX queue is full causing a received frame to be lost.");
-        Serial.printf("can b: RX buffered: %d\n", twai_status_info.msgs_to_rx);
-        Serial.printf("can b: RX missed: %d\n", twai_status_info.rx_missed_count);
-        Serial.printf("can b: RX overrun %d\n", twai_status_info.rx_overrun_count);
+    //         delay(1000);
+    //     }
+    // }
+    // break;
+    // case TWAI_ALERT_TX_FAILED:
+    //     Serial.println("\ncan b: Alert: The Transmission failed.");
+    //     Serial.printf("can b: TX buffered: %d\n", twai_status_info.msgs_to_tx);
+    //     Serial.printf("can b: TX error: %d\n", twai_status_info.tx_error_counter);
+    //     Serial.printf("can b: TX failed: %d\n", twai_status_info.tx_failed_count);
+    //     delay(1000);
+    //     break;
+    // case TWAI_ALERT_TX_SUCCESS:
+    //     Serial.println("\ncan b: Alert: The Transmission was successful.");
+    //     Serial.printf("can b: TX buffered: %d\n", twai_status_info.msgs_to_tx);
+    //     break;
+    // case TWAI_ALERT_RX_QUEUE_FULL:
+    //     Serial.println("\ncan b: Alert: The RX queue is full causing a received frame to be lost.");
+    //     Serial.printf("can b: RX buffered: %d\n", twai_status_info.msgs_to_rx);
+    //     Serial.printf("can b: RX missed: %d\n", twai_status_info.rx_missed_count);
+    //     Serial.printf("can b: RX overrun %d\n", twai_status_info.rx_overrun_count);
 
-        twai_clear_receive_queue();
-        delay(1000);
-        break;
+    //     twai_clear_receive_queue();
+    //     delay(1000);
+    //     break;
 
-    default:
-        break;
-    }
+    // default:
+    //     break;
+    // }
 
-    switch (twai_status_info.state)
-    {
-    case TWAI_STATE_RUNNING:
-        Serial.println("\ncan b: TWAI_STATE_RUNNING");
-        break;
-    case TWAI_STATE_BUS_OFF:
-        Serial.println("\ncan b: TWAI_STATE_BUS_OFF");
-        twai_initiate_recovery();
-        // delay(1000);
-        break;
-    case TWAI_STATE_STOPPED:
-        Serial.println("\ncan b: TWAI_STATE_STOPPED");
-        twai_start();
-        delay(1000);
-        break;
-    case TWAI_STATE_RECOVERING:
-        Serial.println("\ncan b: TWAI_STATE_RECOVERING");
-        delay(1000);
-        break;
+    // switch (twai_status_info.state)
+    // {
+    // case TWAI_STATE_RUNNING:
+    //     Serial.println("\ncan b: TWAI_STATE_RUNNING");
+    //     break;
+    // case TWAI_STATE_BUS_OFF:
+    //     Serial.println("\ncan b: TWAI_STATE_BUS_OFF");
+    //     twai_initiate_recovery();
+    //     // delay(1000);
+    //     break;
+    // case TWAI_STATE_STOPPED:
+    //     Serial.println("\ncan b: TWAI_STATE_STOPPED");
+    //     twai_start();
+    //     delay(1000);
+    //     break;
+    // case TWAI_STATE_RECOVERING:
+    //     Serial.println("\ncan b: TWAI_STATE_RECOVERING");
+    //     delay(1000);
+    //     break;
 
-    default:
-        break;
-    }
+    // default:
+    //     break;
+    // }
 
     // 如果TWAI有信息接收到
     if (alerts_triggered & TWAI_ALERT_RX_DATA)
     {
         twai_message_t rx_buf;
 
-        while (twai_receive(&rx_buf, pdMS_TO_TICKS(1000)) == ESP_OK)
+        while (twai_receive(&rx_buf, 0) == ESP_OK)
         {
             Can_B_Twai_Receive_Message(rx_buf);
+            delay(10);
         }
     }
 
@@ -467,8 +527,15 @@ void loop()
     {
         if (Can_A_B_Send_Flag == true)
         {
+#if defined T_2Can
             Serial.printf("can a: send data\n");
             Can_A.sendMessage(&Can_Send_Package);
+#elif defined T_2Can_Fd
+            Serial.printf("can a fd: send data\n");
+            Can_A.sendMsgBuf(0xAA, 0, CANFD::len2dlc(MAX_DATA_SIZE), Can_Send_Package);
+#else
+#error "no macro definition is set"
+#endif
         }
         else
         {
@@ -480,6 +547,7 @@ void loop()
         CycleTime = millis() + 3000;
     }
 
+#if defined T_2Can
     uint8_t irq = Can_A.getInterrupts();
     if (irq & MCP2515::CANINTF_RX0IF)
     {
@@ -525,4 +593,35 @@ void loop()
     //     }
     //     Serial.println();
     // }
+#elif defined T_2Can_Fd
+    if (CAN_MSGAVAIL == Can_A.checkReceive())
+    {
+        uint8_t len = 0;
+        Can_A.readMsgBuf(&len, Can_Receive_Package);
+        unsigned long id = Can_A.getCanId();
+
+        Serial.print("\ncan a fd received data\n");
+        Serial.printf("can a fd receive id: %#X\n", id);
+        Serial.printf("can a fd receive data length: %d\n", len);
+        Serial.print("can a fd receive data: \n[");
+        for (int i = 0; i < len; i++)
+        {
+            Serial.printf("%c", Can_Receive_Package[i]);
+            if (i != len - 1)
+            {
+                if ((i + 1) % 10 == 0)
+                {
+                    Serial.println(); // 每10个数据换行
+                }
+                else
+                {
+                    Serial.print(",");
+                }
+            }
+        }
+        Serial.printf("]\n");
+    }
+#else
+#error "no macro definition is set"
+#endif
 }

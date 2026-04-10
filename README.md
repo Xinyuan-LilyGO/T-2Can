@@ -2,7 +2,7 @@
  * @Description: None
  * @Author: LILYGO_L
  * @Date: 2023-09-11 16:13:14
- * @LastEditTime: 2025-07-29 15:55:30
+ * @LastEditTime: 2026-04-10 15:54:21
  * @License: GPL 3.0
 -->
 <h1 align = "center">T-2Can</h1>
@@ -13,12 +13,14 @@
 | Version                               | Update date                       |Update description|
 | :-------------------------------: | :-------------------------------: |:--------------: |
 | T-2Can_V1.0                      | 2025-07-07                    |   Original version      |
+| T-2Can-Fd_V1.0                      | 2026-04-10                    |   Can fd version      |
 
 ## PurchaseLink
 
 | Product                     | SOC           |  FLASH  |  PSRAM   | Link                   |
 | :------------------------: | :-----------: |:-------: | :---------: | :------------------: |
-| T-2Can_V1.0   | NULL |   NULL   | NULL |  [NULL]()   |
+| T-2Can_V1.0   | NULL |   NULL   | NULL |  [LILYGO Mall](https://lilygo.cc/products/t-2can?_pos=1&_sid=a2c4b89a1&_ss=r&variant=51355687583925)   |
+| T-2Can-Fd_V1.0   | NULL |   NULL   | NULL |  [NULL]()   |
 
 ## Directory
 - [Describe](#describe)
@@ -32,7 +34,7 @@
 
 ## Describe
 
-T-2Can is a board developed based on the ESP32-S3 chip, featuring two CAN buses.
+The T-2Can is a board developed based on the ESP32-S3 chip and features two CAN buses. The T-2Can-Fd is the FD version of the T-2Can, adding CAN FD functionality. The CAN module used on the T-2Can is the MCP2515, while the CAN module used on the T-2Can-Fd is the MCP2518.
 
 ## Preview
 
@@ -48,12 +50,21 @@ T-2Can is a board developed based on the ESP32-S3 chip, featuring two CAN buses.
     
 ### 2. CAN chip
 
-* Chip: MCP2515
-* Communication Protocol: Uart
-* Related documentation: 
-   >[MCP2515T-E-SO](./information/MCP2515T-E-SO.pdf)
-* Dependent libraries: 
-   >[arduino-mcp2515](https://github.com/autowp/arduino-mcp2515)
+> #### T-2Can_V1.0 version
+> * Chip: MCP2515
+> * Communication Protocol: Spi
+> * Related documentation: 
+>    >[MCP2515T-E-SO](./information/MCP2515T-E-SO.pdf)
+> * Dependent libraries: 
+>    >[arduino-mcp2515](https://github.com/autowp/arduino-mcp2515)
+
+> #### T-2Can-Fd_V1.0 version
+> * Chip: MCP2518
+> * Communication Protocol: Spi
+> * Related documentation: 
+>    >[MCP2518FDT-E-SL](./information/MCP2518FDT-E-SL.pdf)
+> * Dependent libraries: 
+>    >[Longan_CANFD](https://github.com/Longan-Labs/Longan_CANFD)
 
 ## SoftwareDeployment
 
@@ -68,7 +79,8 @@ T-2Can is a board developed based on the ESP32-S3 chip, featuring two CAN buses.
 
 | Firmware | Description | Picture |
 | ------  | ------  | ------ |
-| [original_test](./firmware/(修正can总线500k的串口提示)[T-2Can_V1.0][original_test]_firmware_202506210958.bin) | factory example |  |
+| [original_test](./firmware/[T-2Can_V1.0][original_test]_firmware/) | factory example  |  |
+| [original_test (can fd)](./firmware/[T-2Can-Fd_V1.0][original_test]_firmware/) | can fd factory example  |  |
 
 ### PlatformIO
 1. Install [VisualStudioCode](https://code.visualstudio.com/Download) ,Choose installation based on your system type.
@@ -155,4 +167,5 @@ For pin definitions, please refer to the configuration file: [pin_config.h](./li
 
 ## Project
 * [T-2Can_V1.0](./project/T-2Can_V1.0.pdf)
+* [T-2Can-Fd_V1.0](./project/T-2Can-Fd_V1.0.pdf)
 

@@ -2,7 +2,7 @@
  * @Description: None
  * @Author: LILYGO_L
  * @Date: 2023-09-11 16:13:14
- * @LastEditTime: 2025-07-07 15:07:56
+ * @LastEditTime: 2026-04-10 16:05:44
  * @License: GPL 3.0
 -->
 <h1 align = "center">T-2Can</h1>
@@ -13,12 +13,14 @@
 | Version                               | Update date                       |Update description|
 | :-------------------------------: | :-------------------------------: |:--------------: |
 | T-2Can_V1.0                      | 2025-07-07                    |   初始版本      |
+| T-2Can-Fd_V1.0                      | 2026-04-10                    |   can fd版本      |
 
 ## 购买链接
 
 | Product                     | SOC           |  FLASH  |  PSRAM   | Link                   |
 | :------------------------: | :-----------: |:-------: | :---------: | :------------------: |
-| T-2Can_V1.0   | NULL |   NULL   | NULL |  [NULL]()   |
+| T-2Can_V1.0   | NULL |   NULL   | NULL |  [LILYGO Mall](https://lilygo.cc/products/t-2can?_pos=1&_sid=a2c4b89a1&_ss=r&variant=51355687583925)   |
+| T-2Can-Fd_V1.0   | NULL |   NULL   | NULL |  [NULL]()   |
 
 ## 目录
 - [描述](#描述)
@@ -32,7 +34,7 @@
 
 ## 描述
 
-T-2Can是基于esp32s3芯片开发的，有两个can总线的板子。
+T-2Can是基于esp32s3芯片开发的，有两个can总线的板子，T-2Can-Fd是T-2Can的fd版本，增加了can fd功能。T-2Can上使用的can模块是MCP2515，T-2Can-Fd上使用的can模块是MCP2518。
 
 ## 预览
 
@@ -48,12 +50,21 @@ T-2Can是基于esp32s3芯片开发的，有两个can总线的板子。
     
 ### 2. CAN总线芯片
 
-* 芯片：MCP2515
-* 通信协议：Uart
-* 相关资料：
-   >[MCP2515T-E-SO](./information/MCP2515T-E-SO.pdf)
-* 依赖库：
-   >[arduino-mcp2515](https://github.com/autowp/arduino-mcp2515)
+> #### T-2Can_V1.0 版本
+> * 芯片：MCP2515
+> * 通信协议：Spi
+> * 相关资料：
+>    >[MCP2515T-E-SO](./docs/MCP2515T-E-SO.pdf)
+> * 依赖库：
+>    >[arduino-mcp2515](https://github.com/autowp/arduino-mcp2515)
+
+> #### T-2Can-Fd_V1.0 版本
+> * 芯片：MCP2518
+> * 通信协议：Spi
+> * 相关资料：
+>    >[MCP2518FDT-E-SL](./docs/MCP2518FDT-E-SL.pdf)
+> * 依赖库：
+>    >[Longan_CANFD](https://github.com/Longan-Labs/Longan_CANFD)
 
 ## 软件部署
 
@@ -62,13 +73,14 @@ T-2Can是基于esp32s3芯片开发的，有两个can总线的板子。
 | Example | `[Platformio IDE][espressif32-v6.5.0]`<br />`[Arduino IDE][esp32_v2.0.14]` | Description | Picture |
 | ------  | ------ | ------ | ------ | 
 | [can](./examples/can) |  <p align="center">![alt text][supported] | | |
-| [Original_Test](./examples/original_test) |  <p align="center">![alt text][supported] | 出厂程序 | |
+| [original_test](./examples/original_test) |  <p align="center">![alt text][supported] | 出厂程序 | |
 
 [supported]: https://img.shields.io/badge/-supported-green "example"
 
 | Firmware | Description | Picture |
 | ------  | ------  | ------ |
-| [original_test](./firmware/(修正can总线500k的串口提示)[T-2Can_V1.0][original_test]_firmware_202506210958.bin) | 出厂程序 |  |
+| [original_test](./firmware/[T-2Can_V1.0][original_test]_firmware/) | 出厂程序 |  |
+| [original_test (can fd)](./firmware/[T-2Can-Fd_V1.0][original_test]_firmware/) | can fd版本出厂程序 |  |
 
 ### PlatformIO
 1. 安装 [VisualStudioCode](https://code.visualstudio.com/Download) ，根据你的系统类型选择安装。
@@ -155,3 +167,4 @@ T-2Can是基于esp32s3芯片开发的，有两个can总线的板子。
 
 ## 项目
 * [T-2Can_V1.0](./project/T-2Can_V1.0.pdf)
+* [T-2Can-Fd_V1.0](./project/T-2Can-Fd_V1.0.pdf)
