@@ -2,7 +2,7 @@
  * @Description: None
  * @Author: LILYGO_L
  * @Date: 2023-06-05 13:01:59
- * @LastEditTime: 2026-04-10 15:36:53
+ * @LastEditTime: 2026-04-29 11:41:17
  */
 #pragma once
 
@@ -25,6 +25,7 @@
 #define MCP2515_MOSI SPI_MOSI
 #define MCP2515_MISO SPI_MISO
 #define MCP2515_RST 9
+#define MCP2515_INT 8
 #elif defined T_2Can_Fd
 #define MCP2518_CS 10
 #define MCP2518_SCLK SPI_SCLK
