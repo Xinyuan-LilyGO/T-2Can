@@ -2,7 +2,7 @@
  * @Description: original_test
  * @Author: LILYGO_L
  * @Date: 2024-11-07 10:04:14
- * @LastEditTime: 2026-04-10 15:35:47
+ * @LastEditTime: 2026-06-01 10:17:13
  * @License: GPL 3.0
  */
 
@@ -18,7 +18,7 @@
 #endif
 #include <SPI.h>
 #include "WiFi.h"
-#include <HTTPClient.h>
+#include <time.h>
 
 // Intervall:
 #define POLLING_RATE_MS 100
@@ -29,6 +29,9 @@
 #define WIFI_PASSWORD "xinyuandianzi"
 
 #define WIFI_CONNECT_WAIT_MAX 5000
+#define WIFI_TIME_SYNC_WAIT_MAX 10000
+#define WIFI_TIME_ZONE_OFFSET_SEC (8 * 60 * 60)
+#define WIFI_DAYLIGHT_OFFSET_SEC 0
 
 #if defined T_2Can
 #elif defined T_2Can_Fd
@@ -38,7 +41,7 @@
 #endif
 
 #define SOFTWARE_NAME "Original_Test"
-#define SOFTWARE_LASTEDITTIME "202604101527"
+#define SOFTWARE_LASTEDITTIME "202606011017"
 #define BOARD_VERSION "V1.0"
 
 size_t CycleTime = 0;
@@ -46,8 +49,6 @@ size_t CycleTime = 0;
 uint64_t Can_Count = 0;
 
 bool Can_A_B_Send_Flag = true;
-
-const char *fileDownloadUrl = "https://cd001.www.duba.net/duba/install/packages/ever/kinsthomeui_150_15.exe";
 
 static bool Wifi_Connection_Flag = false;
 
@@ -244,112 +245,40 @@ void Wifi_STA_Test(void)
     }
 }
 
-void WIFI_STA_Test_Loop(void)
+void WIFI_Time_Test(void)
 {
-    if (Wifi_Connection_Flag == true)
+    if (Wifi_Connection_Flag != true)
     {
-        // 初始化HTTP客户端
-        HTTPClient http;
-        http.begin(fileDownloadUrl);
-        // 获取重定向的URL
-        const char *headerKeys[] = {"Location"};
-        http.collectHeaders(headerKeys, 1);
-
-        // 记录下载开始时间
-        size_t startTime = millis();
-        // 无用时间
-        size_t uselessTime = 0;
-
-        // 发起GET请求
-        int httpCode = http.GET();
-
-        while (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND)
-        {
-            String newUrl = http.header("Location");
-            Serial.printf("Redirecting to: %s\n", newUrl.c_str());
-            http.end(); // 关闭旧的HTTP连接
-
-            // 使用新的URL重新发起GET请求
-            http.begin(newUrl);
-            httpCode = http.GET();
-        }
-
-        if (httpCode == HTTP_CODE_OK)
-        {
-            // 获取文件大小
-            size_t fileSize = http.getSize();
-            Serial.printf("Starting file download...\n");
-            Serial.printf("file size: %f MB\n", fileSize / 1024.0 / 1024.0);
-
-            // 读取HTTP响应
-            WiFiClient *stream = http.getStreamPtr();
-
-            size_t temp_count_s = 0;
-            size_t temp_fileSize = fileSize;
-            uint8_t *buf_1 = (uint8_t *)heap_caps_malloc(100 * 1024, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-            // uint8_t buf_1[4096] = {0};
-            CycleTime = millis() + 1000; // 开始计时
-            bool temp_count_flag = true;
-            while (http.connected() && (temp_fileSize > 0 || temp_fileSize == -1))
-            {
-                // 获取可用数据的大小
-                size_t availableSize = stream->available();
-                if (availableSize)
-                {
-                    temp_fileSize -= stream->read(buf_1, min(availableSize, (size_t)(100 * 1024)));
-
-                    if (millis() > CycleTime)
-                    {
-                        size_t temp_time_1 = millis();
-                        temp_count_s++;
-                        Serial.printf("Download speed: %f KB/s\n", ((fileSize - temp_fileSize) / 1024.0) / temp_count_s);
-                        Serial.printf("Remaining file size: %f MB\n\n", temp_fileSize / 1024.0 / 1024.0);
-
-                        CycleTime = millis() + 1000;
-                        size_t temp_time_2 = millis();
-
-                        uselessTime = uselessTime + (temp_time_2 - temp_time_1);
-                    }
-                }
-                // delay(1);
-
-                if (temp_count_s > 30)
-                {
-                    temp_count_flag = false;
-                    break;
-                }
-            }
-
-            // 关闭HTTP客户端
-            http.end();
-
-            // 记录下载结束时间并计算总花费时间
-            size_t endTime = millis();
-
-            if (temp_count_flag == true)
-            {
-                Serial.printf("Download completed!\n");
-                Serial.printf("Total download time: %f s\n", (endTime - startTime - uselessTime) / 1000.0);
-                Serial.printf("Average download speed: %f KB/s\n", (fileSize / 1024.0) / ((endTime - startTime - uselessTime) / 1000.0));
-            }
-            else
-            {
-                Serial.printf("Download incomplete!\n");
-                Serial.printf("Download time: %f s\n", (endTime - startTime - uselessTime) / 1000.0);
-                Serial.printf("Average download speed: %f KB/s\n", ((fileSize - temp_fileSize) / 1024.0) / ((endTime - startTime - uselessTime) / 1000.0));
-            }
-        }
-        else
-        {
-            Serial.printf("Failed to download\n");
-            Serial.printf("Error httpCode: %d \n", httpCode);
-        }
+        Serial.println("Not connected to the network");
+        return;
     }
-    else
+
+    Serial.println("Syncing time from NTP...");
+    configTime(WIFI_TIME_ZONE_OFFSET_SEC, WIFI_DAYLIGHT_OFFSET_SEC,
+               "pool.ntp.org", "time.nist.gov", "ntp.aliyun.com");
+
+    struct tm timeinfo;
+    uint32_t start_tick = millis();
+    while (!getLocalTime(&timeinfo))
     {
-        Serial.print("Not connected to the network");
+        if (millis() - start_tick > WIFI_TIME_SYNC_WAIT_MAX)
+        {
+            Serial.println("NTP time sync failed");
+            return;
+        }
+        Serial.print(".");
+        delay(500);
     }
-    delay(1000);
+
+    Serial.println();
+    Serial.printf("NTP time sync success, takes %lu ms\n", millis() - start_tick);
+    Serial.printf("Local time: %04d-%02d-%02d %02d:%02d:%02d\n",
+                  timeinfo.tm_year + 1900,
+                  timeinfo.tm_mon + 1,
+                  timeinfo.tm_mday,
+                  timeinfo.tm_hour,
+                  timeinfo.tm_min,
+                  timeinfo.tm_sec);
 }
 
 void setup()
@@ -368,7 +297,7 @@ void setup()
 #endif
 
     Wifi_STA_Test();
-    WIFI_STA_Test_Loop();
+    WIFI_Time_Test();
 
 #if defined T_2Can
     Can_Send_Package.can_id = 0xAA;
@@ -536,6 +465,7 @@ void loop()
 #else
 #error "no macro definition is set"
 #endif
+
         }
         else
         {
