@@ -2,11 +2,12 @@
  * @Description: original_test
  * @Author: LILYGO_L
  * @Date: 2024-11-07 10:04:14
- * @LastEditTime: 2026-06-01 10:17:13
+ * @LastEditTime: 2026-06-02 17:07:12
  * @License: GPL 3.0
  */
 
 #include <Arduino.h>
+#include <stdarg.h>
 #include "driver/twai.h"
 #include "pin_config.h"
 #if defined T_2Can
@@ -18,6 +19,7 @@
 #endif
 #include <SPI.h>
 #include "WiFi.h"
+#include <WebServer.h>
 #include <time.h>
 
 // Intervall:
@@ -32,6 +34,11 @@
 #define WIFI_TIME_SYNC_WAIT_MAX 10000
 #define WIFI_TIME_ZONE_OFFSET_SEC (8 * 60 * 60)
 #define WIFI_DAYLIGHT_OFFSET_SEC 0
+#define WIFI_AP_SSID "T-2Can_Log"
+#define WIFI_AP_PASSWORD "12345678"
+#define WIFI_AP_CHANNEL 1
+#define WIFI_AP_MAX_CONNECTIONS 4
+#define WEB_LOG_MAX_LENGTH 20000
 
 #if defined T_2Can
 #elif defined T_2Can_Fd
@@ -51,6 +58,17 @@ uint64_t Can_Count = 0;
 bool Can_A_B_Send_Flag = true;
 
 static bool Wifi_Connection_Flag = false;
+static bool Wifi_AP_Flag = false;
+static String Web_Log_Buffer;
+WebServer Http_Server(80);
+
+void AppLogPrint(const String &message);
+template <typename T>
+void AppLogPrint(const T &message);
+void AppLogPrintln(const String &message = "");
+template <typename T>
+void AppLogPrintln(const T &message);
+void AppLogPrintf(const char *format, ...);
 
 #if defined T_2Can
 struct can_frame Can_Receive_Package;
@@ -66,6 +84,147 @@ mcp2518fd Can_A(MCP2518_CS);
 #error "no macro definition is set"
 #endif
 
+void AppendWebLog(const String &message)
+{
+    Web_Log_Buffer += message;
+    if (Web_Log_Buffer.length() > WEB_LOG_MAX_LENGTH)
+    {
+        Web_Log_Buffer.remove(0, Web_Log_Buffer.length() - WEB_LOG_MAX_LENGTH);
+    }
+}
+
+void AppLogPrint(const String &message)
+{
+    Serial.print(message);
+    AppendWebLog(message);
+}
+
+template <typename T>
+void AppLogPrint(const T &message)
+{
+    Serial.print(message);
+    AppendWebLog(String(message));
+}
+
+void AppLogPrintln(const String &message)
+{
+    Serial.println(message);
+    AppendWebLog(message + "\n");
+}
+
+template <typename T>
+void AppLogPrintln(const T &message)
+{
+    Serial.println(message);
+    AppendWebLog(String(message) + "\n");
+}
+
+void AppLogPrintf(const char *format, ...)
+{
+    char buffer[256];
+    va_list args;
+    va_start(args, format);
+    int length = vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    if (length < 0)
+    {
+        return;
+    }
+
+    if ((size_t)length < sizeof(buffer))
+    {
+        AppLogPrint(String(buffer));
+        return;
+    }
+
+    char *dynamic_buffer = (char *)malloc(length + 1);
+    if (dynamic_buffer == NULL)
+    {
+        AppLogPrint(String(buffer));
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(dynamic_buffer, length + 1, format, args);
+    va_end(args);
+    AppLogPrint(String(dynamic_buffer));
+    free(dynamic_buffer);
+}
+
+String HtmlEscape(const String &input)
+{
+    String output;
+    output.reserve(input.length());
+    for (size_t i = 0; i < input.length(); i++)
+    {
+        char c = input[i];
+        if (c == '&')
+        {
+            output += "&amp;";
+        }
+        else if (c == '<')
+        {
+            output += "&lt;";
+        }
+        else if (c == '>')
+        {
+            output += "&gt;";
+        }
+        else
+        {
+            output += c;
+        }
+    }
+    return output;
+}
+
+void HandleRoot()
+{
+    String html;
+    html.reserve(Web_Log_Buffer.length() + 900);
+    html += F("<!doctype html><html><head><meta charset='utf-8'>");
+    html += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
+    html += F("<title>T-2Can Log</title>");
+    html += F("<style>body{font-family:Consolas,monospace;margin:16px;background:#101418;color:#e8eef2;}");
+    html += F("a{color:#8cc7ff}pre{white-space:pre-wrap;word-break:break-word;border:1px solid #2d3942;padding:12px;min-height:70vh;background:#05080a;}");
+    html += F(".bar{display:flex;gap:12px;align-items:center;margin-bottom:12px}</style>");
+    html += F("<script>setInterval(()=>fetch('/log').then(r=>r.text()).then(t=>document.getElementById('log').textContent=t),1000);</script>");
+    html += F("</head><body><div class='bar'><strong>T-2Can Serial Log</strong><a href='/log'>text</a><a href='/clear'>clear</a></div><pre id='log'>");
+    html += HtmlEscape(Web_Log_Buffer);
+    html += F("</pre></body></html>");
+    Http_Server.send(200, "text/html; charset=utf-8", html);
+}
+
+void HandleLogText()
+{
+    Http_Server.send(200, "text/plain; charset=utf-8", Web_Log_Buffer);
+}
+
+void HandleClearLog()
+{
+    Web_Log_Buffer = "";
+    Http_Server.sendHeader("Location", "/", true);
+    Http_Server.send(302, "text/plain", "");
+}
+
+void Wifi_AP_HTTP_Init(void)
+{
+    WiFi.mode(WIFI_AP_STA);
+    Wifi_AP_Flag = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CONNECTIONS);
+
+    Http_Server.on("/", HTTP_GET, HandleRoot);
+    Http_Server.on("/log", HTTP_GET, HandleLogText);
+    Http_Server.on("/clear", HTTP_GET, HandleClearLog);
+    Http_Server.begin();
+
+    IPAddress ip = WiFi.softAPIP();
+    AppLogPrintf("WiFi AP %s\n", Wifi_AP_Flag ? "started" : "start failed");
+    AppLogPrintf("AP SSID: %s\n", WIFI_AP_SSID);
+    AppLogPrintf("AP password: %s\n", WIFI_AP_PASSWORD);
+    AppLogPrintf("HTTP log URL: http://%s/\n", ip.toString().c_str());
+}
+
 void Can_B_Drive_Initialization()
 {
     // Initialize configuration structures using macro initializers
@@ -76,21 +235,21 @@ void Can_B_Drive_Initialization()
     // Install TWAI driver
     if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK)
     {
-        Serial.println("can b: Driver installed");
+        AppLogPrintln("can b: Driver installed");
     }
     else
     {
-        Serial.println("can b: Failed to install driver");
+        AppLogPrintln("can b: Failed to install driver");
     }
 
     // Start TWAI driver
     if (twai_start() == ESP_OK)
     {
-        Serial.println("can b: Driver started");
+        AppLogPrintln("can b: Driver started");
     }
     else
     {
-        Serial.println("can b: Failed to start driver");
+        AppLogPrintln("can b: Failed to start driver");
     }
 
     // 配置
@@ -101,11 +260,11 @@ void Can_B_Drive_Initialization()
 
     if (twai_reconfigure_alerts(alerts_to_enable, NULL) == ESP_OK)
     {
-        Serial.println("can b: CAN Alerts reconfigured");
+        AppLogPrintln("can b: CAN Alerts reconfigured");
     }
     else
     {
-        Serial.println("can b: Failed to reconfigure alerts");
+        AppLogPrintln("can b: Failed to reconfigure alerts");
     }
 }
 
@@ -133,7 +292,7 @@ void Can_B_Twai_Send_Message()
     }
     else
     {
-        printf("can b: Failed to queue message for transmission\n");
+        AppLogPrintf("can b: Failed to queue message for transmission\n");
     }
 }
 
@@ -142,23 +301,23 @@ void Can_B_Twai_Receive_Message(twai_message_t &message)
     // Process received message
     if (message.extd)
     {
-        Serial.println("can b: Message is in Extended Format");
+        AppLogPrintln("can b: Message is in Extended Format");
         return;
     }
     else
     {
-        // Serial.println("can b: Message is in Standard Format");
+        // AppLogPrintln("can b: Message is in Standard Format");
     }
-    Serial.printf("\ncan b received data\n");
-    Serial.printf("can b receive id: 0x%X\n", message.identifier);
-    Serial.printf("can b receive data_length: %d\n", message.data_length_code);
+    AppLogPrintf("\ncan b received data\n");
+    AppLogPrintf("can b receive id: 0x%X\n", message.identifier);
+    AppLogPrintf("can b receive data length: %d\n", message.data_length_code);
     if (!(message.rtr))
     {
         for (int i = 0; i < message.data_length_code; i++)
         {
-            Serial.printf("can b receive data [%d]: %d\n", i, message.data[i]);
+            AppLogPrintf("can b receive data [%d]: %d\n", i, message.data[i]);
         }
-        Serial.println("");
+        AppLogPrintln("");
     }
 }
 
@@ -167,9 +326,8 @@ void Wifi_STA_Test(void)
     String text;
     int wifi_num = 0;
 
-    Serial.printf("\nScanning wifi");
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
+    AppLogPrintf("\nScanning wifi");
+    WiFi.mode(WIFI_AP_STA);
     delay(100);
 
     wifi_num = WiFi.scanNetworks();
@@ -196,24 +354,25 @@ void Wifi_STA_Test(void)
         }
     }
 
-    Serial.println(text);
+    AppLogPrintln(text);
 
     delay(3000);
     text.clear();
 
     text = "Connecting to ";
-    Serial.print("Connecting to ");
+    AppLogPrint("Connecting to ");
     text += WIFI_SSID;
     text += "\n";
 
-    Serial.print(WIFI_SSID);
+    AppLogPrint(WIFI_SSID);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     uint32_t last_tick = millis();
 
     while (WiFi.status() != WL_CONNECTED)
     {
-        Serial.print(".");
+        Http_Server.handleClient();
+        AppLogPrint(".");
         text += ".";
         delay(100);
 
@@ -231,17 +390,17 @@ void Wifi_STA_Test(void)
     if (Wifi_Connection_Flag == true)
     {
         text += "\nThe connection was successful ! \nTakes ";
-        Serial.print("\nThe connection was successful ! \nTakes ");
+        AppLogPrint("\nThe connection was successful ! \nTakes ");
 
         text += millis() - last_tick;
-        Serial.print(millis() - last_tick);
+        AppLogPrint(millis() - last_tick);
 
         text += " ms\n";
-        Serial.println(" ms\n");
+        AppLogPrintln(" ms\n");
     }
     else
     {
-        Serial.printf("\nWifi test error!\n");
+        AppLogPrintf("\nWifi test error!\n");
     }
 }
 
@@ -249,11 +408,11 @@ void WIFI_Time_Test(void)
 {
     if (Wifi_Connection_Flag != true)
     {
-        Serial.println("Not connected to the network");
+        AppLogPrintln("Not connected to the network");
         return;
     }
 
-    Serial.println("Syncing time from NTP...");
+    AppLogPrintln("Syncing time from NTP...");
     configTime(WIFI_TIME_ZONE_OFFSET_SEC, WIFI_DAYLIGHT_OFFSET_SEC,
                "pool.ntp.org", "time.nist.gov", "ntp.aliyun.com");
 
@@ -261,18 +420,19 @@ void WIFI_Time_Test(void)
     uint32_t start_tick = millis();
     while (!getLocalTime(&timeinfo))
     {
+        Http_Server.handleClient();
         if (millis() - start_tick > WIFI_TIME_SYNC_WAIT_MAX)
         {
-            Serial.println("NTP time sync failed");
+            AppLogPrintln("NTP time sync failed");
             return;
         }
-        Serial.print(".");
+        AppLogPrint(".");
         delay(500);
     }
 
-    Serial.println();
-    Serial.printf("NTP time sync success, takes %lu ms\n", millis() - start_tick);
-    Serial.printf("Local time: %04d-%02d-%02d %02d:%02d:%02d\n",
+    AppLogPrintln();
+    AppLogPrintf("NTP time sync success, takes %lu ms\n", millis() - start_tick);
+    AppLogPrintf("Local time: %04d-%02d-%02d %02d:%02d:%02d\n",
                   timeinfo.tm_year + 1900,
                   timeinfo.tm_mon + 1,
                   timeinfo.tm_mday,
@@ -284,18 +444,19 @@ void WIFI_Time_Test(void)
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("Ciallo");
+    AppLogPrintln("Ciallo");
 #if defined T_2Can
-    Serial.println("[T_2Can_" + (String)BOARD_VERSION "][" + (String)SOFTWARE_NAME +
+    AppLogPrintln("[T_2Can_" + (String)BOARD_VERSION "][" + (String)SOFTWARE_NAME +
                    "]_firmware_" + (String)SOFTWARE_LASTEDITTIME);
 
 #elif defined T_2Can_Fd
-    Serial.println("[T_2Can_Fd_" + (String)BOARD_VERSION "][" + (String)SOFTWARE_NAME +
+    AppLogPrintln("[T_2Can_Fd_" + (String)BOARD_VERSION "][" + (String)SOFTWARE_NAME +
                    "]_firmware_" + (String)SOFTWARE_LASTEDITTIME);
 #else
 #error "no macro definition is set"
 #endif
 
+    Wifi_AP_HTTP_Init();
     Wifi_STA_Test();
     WIFI_Time_Test();
 
@@ -325,7 +486,7 @@ void setup()
     Can_A.setBitrate(CAN_500KBPS);
     Can_A.setNormalMode();
 
-    Serial.println("can a speed: 1000kbps");
+    AppLogPrintln("can a speed: 1000kbps");
 
 #elif defined T_2Can_Fd
     memset(Can_Send_Package, 'A', MAX_DATA_SIZE);
@@ -336,24 +497,26 @@ void setup()
 
     if (Can_A.begin(CAN_500K_5M) != CAN_OK)
     {
-        Serial.println("can a fd init fail");
+        AppLogPrintln("can a fd init fail");
     }
     else
     {
-        Serial.println("can a fd init success");
+        AppLogPrintln("can a fd init success");
     }
 
-    Serial.println("can a fd speed: 5000kbps");
+    AppLogPrintln("can a fd speed: 5000kbps");
 #else
 #error "no macro definition is set"
 #endif
 
     Can_B_Drive_Initialization();
-    Serial.println("can b speed: 500kbps");
+    AppLogPrintln("can b speed: 500kbps");
 }
 
 void loop()
 {
+    Http_Server.handleClient();
+
     // 通信报警检测
     uint32_t alerts_triggered;
     twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(POLLING_RATE_MS));
@@ -364,13 +527,13 @@ void loop()
     // switch (alerts_triggered)
     // {
     // case TWAI_ALERT_ERR_PASS:
-    //     Serial.println("\ncan b: Alert: TWAI controller has become error passive.");
+    //     AppLogPrintln("\ncan b: Alert: TWAI controller has become error passive.");
     //     delay(1000);
     //     break;
     // case TWAI_ALERT_BUS_ERROR:
     // {
-    //     Serial.println("\ncan b: Alert: A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus.");
-    //     Serial.printf("can b: Bus error count: %d\n", twai_status_info.bus_error_count);
+    //     AppLogPrintln("\ncan b: Alert: A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus.");
+    //     AppLogPrintf("can b: Bus error count: %d\n", twai_status_info.bus_error_count);
 
     //     uint8_t temp = 0;
     //     while (1)
@@ -392,21 +555,21 @@ void loop()
     // }
     // break;
     // case TWAI_ALERT_TX_FAILED:
-    //     Serial.println("\ncan b: Alert: The Transmission failed.");
-    //     Serial.printf("can b: TX buffered: %d\n", twai_status_info.msgs_to_tx);
-    //     Serial.printf("can b: TX error: %d\n", twai_status_info.tx_error_counter);
-    //     Serial.printf("can b: TX failed: %d\n", twai_status_info.tx_failed_count);
+    //     AppLogPrintln("\ncan b: Alert: The Transmission failed.");
+    //     AppLogPrintf("can b: TX buffered: %d\n", twai_status_info.msgs_to_tx);
+    //     AppLogPrintf("can b: TX error: %d\n", twai_status_info.tx_error_counter);
+    //     AppLogPrintf("can b: TX failed: %d\n", twai_status_info.tx_failed_count);
     //     delay(1000);
     //     break;
     // case TWAI_ALERT_TX_SUCCESS:
-    //     Serial.println("\ncan b: Alert: The Transmission was successful.");
-    //     Serial.printf("can b: TX buffered: %d\n", twai_status_info.msgs_to_tx);
+    //     AppLogPrintln("\ncan b: Alert: The Transmission was successful.");
+    //     AppLogPrintf("can b: TX buffered: %d\n", twai_status_info.msgs_to_tx);
     //     break;
     // case TWAI_ALERT_RX_QUEUE_FULL:
-    //     Serial.println("\ncan b: Alert: The RX queue is full causing a received frame to be lost.");
-    //     Serial.printf("can b: RX buffered: %d\n", twai_status_info.msgs_to_rx);
-    //     Serial.printf("can b: RX missed: %d\n", twai_status_info.rx_missed_count);
-    //     Serial.printf("can b: RX overrun %d\n", twai_status_info.rx_overrun_count);
+    //     AppLogPrintln("\ncan b: Alert: The RX queue is full causing a received frame to be lost.");
+    //     AppLogPrintf("can b: RX buffered: %d\n", twai_status_info.msgs_to_rx);
+    //     AppLogPrintf("can b: RX missed: %d\n", twai_status_info.rx_missed_count);
+    //     AppLogPrintf("can b: RX overrun %d\n", twai_status_info.rx_overrun_count);
 
     //     twai_clear_receive_queue();
     //     delay(1000);
@@ -419,20 +582,20 @@ void loop()
     // switch (twai_status_info.state)
     // {
     // case TWAI_STATE_RUNNING:
-    //     Serial.println("\ncan b: TWAI_STATE_RUNNING");
+    //     AppLogPrintln("\ncan b: TWAI_STATE_RUNNING");
     //     break;
     // case TWAI_STATE_BUS_OFF:
-    //     Serial.println("\ncan b: TWAI_STATE_BUS_OFF");
+    //     AppLogPrintln("\ncan b: TWAI_STATE_BUS_OFF");
     //     twai_initiate_recovery();
     //     // delay(1000);
     //     break;
     // case TWAI_STATE_STOPPED:
-    //     Serial.println("\ncan b: TWAI_STATE_STOPPED");
+    //     AppLogPrintln("\ncan b: TWAI_STATE_STOPPED");
     //     twai_start();
     //     delay(1000);
     //     break;
     // case TWAI_STATE_RECOVERING:
-    //     Serial.println("\ncan b: TWAI_STATE_RECOVERING");
+    //     AppLogPrintln("\ncan b: TWAI_STATE_RECOVERING");
     //     delay(1000);
     //     break;
 
@@ -457,10 +620,10 @@ void loop()
         if (Can_A_B_Send_Flag == true)
         {
 #if defined T_2Can
-            Serial.printf("can a: send data\n");
+            AppLogPrintf("can a: send data\n");
             Can_A.sendMessage(&Can_Send_Package);
 #elif defined T_2Can_Fd
-            Serial.printf("can a fd: send data\n");
+            AppLogPrintf("can a fd: send data\n");
             Can_A.sendMsgBuf(0xAA, 0, CANFD::len2dlc(MAX_DATA_SIZE), Can_Send_Package);
 #else
 #error "no macro definition is set"
@@ -469,7 +632,7 @@ void loop()
         }
         else
         {
-            Serial.printf("can b: send data\n");
+            AppLogPrintf("can b: send data\n");
             Can_B_Twai_Send_Message();
         }
         Can_A_B_Send_Flag = !Can_A_B_Send_Flag;
@@ -483,45 +646,45 @@ void loop()
     {
         if (Can_A.readMessage(MCP2515::RXB0, &Can_Receive_Package) == MCP2515::ERROR_OK)
         {
-            // frame contains received from RXB0 message
+            // frame contains received from message
 
-            Serial.printf("\ncan a received RXB0 data\n");
-            Serial.printf("can a receive id: 0x%X\n", Can_Receive_Package.can_id);
-            Serial.printf("can a receive data length: %d\n", Can_Receive_Package.can_dlc);
+            AppLogPrintf("\ncan a received data\n");
+            AppLogPrintf("can a receive id: 0x%X\n", Can_Receive_Package.can_id);
+            AppLogPrintf("can a receive data length: %d\n", Can_Receive_Package.can_dlc);
             for (int i = 0; i < Can_Receive_Package.can_dlc; i++)
             {
-                Serial.printf("can a receive data [%d]: %d\n", i, Can_Receive_Package.data[i]);
+                AppLogPrintf("can a receive data [%d]: %d\n", i, Can_Receive_Package.data[i]);
             }
-            Serial.println();
+            AppLogPrintln();
         }
     }
     else if (irq & MCP2515::CANINTF_RX1IF)
     {
         if (Can_A.readMessage(MCP2515::RXB1, &Can_Receive_Package) == MCP2515::ERROR_OK)
         {
-            // frame contains received from RXB1 message
+            // frame contains received from message
 
-            Serial.printf("\ncan a received RXB1 data\n");
-            Serial.printf("can a receive id: 0x%X\n", Can_Receive_Package.can_id);
-            Serial.printf("can a receive data length: %d\n", Can_Receive_Package.can_dlc);
+            AppLogPrintf("\ncan a received data\n");
+            AppLogPrintf("can a receive id: 0x%X\n", Can_Receive_Package.can_id);
+            AppLogPrintf("can a receive data length: %d\n", Can_Receive_Package.can_dlc);
             for (int i = 0; i < Can_Receive_Package.can_dlc; i++)
             {
-                Serial.printf("can a receive data [%d]: %d\n", i, Can_Receive_Package.data[i]);
+                AppLogPrintf("can a receive data [%d]: %d\n", i, Can_Receive_Package.data[i]);
             }
-            Serial.println();
+            AppLogPrintln();
         }
     }
 
     // if (Can_A.readMessage(&Can_Receive_Package) == MCP2515::ERROR_OK)
     // {
-    //     Serial.printf("\ncan a received data\n");
-    //     Serial.printf("can a receive id: 0x%X\n", Can_Receive_Package.can_id);
-    //     Serial.printf("can a receive data length: %d\n", Can_Receive_Package.can_dlc);
+    //     AppLogPrintf("\ncan a received data\n");
+    //     AppLogPrintf("can a receive id: 0x%X\n", Can_Receive_Package.can_id);
+    //     AppLogPrintf("can a receive data length: %d\n", Can_Receive_Package.can_dlc);
     //     for (int i = 0; i < Can_Receive_Package.can_dlc; i++)
     //     {
-    //         Serial.printf("can a receive data [%d]: %d\n", i, Can_Receive_Package.data[i]);
+    //         AppLogPrintf("can a receive data [%d]: %d\n", i, Can_Receive_Package.data[i]);
     //     }
-    //     Serial.println();
+    //     AppLogPrintln();
     // }
 #elif defined T_2Can_Fd
     if (CAN_MSGAVAIL == Can_A.checkReceive())
@@ -530,26 +693,26 @@ void loop()
         Can_A.readMsgBuf(&len, Can_Receive_Package);
         unsigned long id = Can_A.getCanId();
 
-        Serial.print("\ncan a fd received data\n");
-        Serial.printf("can a fd receive id: %#X\n", id);
-        Serial.printf("can a fd receive data length: %d\n", len);
-        Serial.print("can a fd receive data: \n[");
+        AppLogPrint("\ncan a fd received data\n");
+        AppLogPrintf("can a fd receive id: %#X\n", id);
+        AppLogPrintf("can a fd receive data length: %d\n", len);
+        AppLogPrint("can a fd receive data: \n[");
         for (int i = 0; i < len; i++)
         {
-            Serial.printf("%c", Can_Receive_Package[i]);
+            AppLogPrintf("%c", Can_Receive_Package[i]);
             if (i != len - 1)
             {
                 if ((i + 1) % 10 == 0)
                 {
-                    Serial.println(); // 每10个数据换行
+                    AppLogPrintln(); // 每10个数据换行
                 }
                 else
                 {
-                    Serial.print(",");
+                    AppLogPrint(",");
                 }
             }
         }
-        Serial.printf("]\n");
+        AppLogPrintf("]\n");
     }
 #else
 #error "no macro definition is set"
