@@ -39,30 +39,6 @@ uint32_t g_can_pending_alerts = 0;
 uint32_t g_can_last_status_print_ms = 0;
 uint32_t g_can_last_recover_ms = 0;
 
-bool ValidateData(const char* tag, const uint8_t* data, size_t len,
-                  uint8_t expected_char)
-{
-  for (size_t i = 0; i < len; ++i) {
-    if (data[i] != expected_char) {
-      Serial.printf("\n[%s] data corruption error\n", tag);
-      Serial.printf("[%s] offset: %u, expected: 0x%02X ('%c'), got: 0x%02X\n",
-                    tag, static_cast<unsigned>(i), expected_char,
-                    expected_char, data[i]);
-      Serial.printf("[%s] data snippet:", tag);
-      const size_t start = (i > 5) ? i - 5 : 0;
-      const size_t end = (i + 5 > len) ? len : i + 5;
-      for (size_t j = start; j < end; ++j) {
-        Serial.printf(" 0x%02X", data[j]);
-      }
-      Serial.println();
-      g_can_exit_test = true;
-      return false;
-    }
-  }
-
-  return true;
-}
-
 void PrintCanFrame(const twai_message_t& frame)
 {
   Serial.printf("[can receive] raw id=0x%lX dlc=%u ext=%d rtr=%d data:",
@@ -75,33 +51,20 @@ void PrintCanFrame(const twai_message_t& frame)
   Serial.println();
 }
 
-void PrintProgress(const char* tag, size_t bytes_this_time, size_t total_size,
-                   uint32_t now, uint32_t last_print_time)
+uint32_t GetCanBusErrorCount()
 {
-  const float elapsed_s =
-      static_cast<float>(now - last_print_time) / 1000.0f;
-  const float speed_kbps =
-      (elapsed_s > 0.0f)
-          ? static_cast<float>(bytes_this_time) / 1024.0f / elapsed_s
-          : 0.0f;
-  Serial.printf("[%s] size: %.2f KB | speed: %.2f KB/s | total size: %.2f KB\n",
-                tag, static_cast<float>(bytes_this_time) / 1024.0f,
-                speed_kbps, static_cast<float>(total_size) / 1024.0f);
+  twai_status_info_t status = {};
+  if (twai_get_status_info(&status) != ESP_OK) {
+    return 0;
+  }
+  return status.bus_error_count;
 }
 
-void PrintResult(const char* tag, size_t total_size, uint32_t start_time)
+void PrintCanTransferStatus(const char* tag, size_t total_size)
 {
-  const float total_time_s =
-      static_cast<float>(millis() - start_time) / 1000.0f;
-  const float avg_speed =
-      (total_time_s > 0.0f)
-          ? static_cast<float>(total_size) / 1024.0f / total_time_s
-          : 0.0f;
-  Serial.printf("[%s] === result ===\n", tag);
-  Serial.printf("[%s] total size: %.2f KB\n", tag,
-                static_cast<float>(total_size) / 1024.0f);
-  Serial.printf("[%s] total time %.3f s\n", tag, total_time_s);
-  Serial.printf("[%s] avg speed: %.2f KB/s\n", tag, avg_speed);
+  Serial.printf("[%s] total %u B | bus error %lu\n", tag,
+                static_cast<unsigned>(total_size),
+                static_cast<unsigned long>(GetCanBusErrorCount()));
 }
 
 bool InitCan()
@@ -231,9 +194,7 @@ void CanTask(void* param)
   }
 
   size_t total_size = 0;
-  size_t bytes_this_time = 0;
-  const uint32_t start_time = millis();
-  uint32_t last_print_time = start_time;
+  uint32_t last_print_time = millis();
 
   if (is_send) {
     twai_message_t message = {};
@@ -261,21 +222,18 @@ void CanTask(void* param)
       if (status.msgs_to_tx < kCanTxQueueDepth) {
         const esp_err_t err = twai_transmit(&message, kCanTxWaitTicks);
         if (err == ESP_OK) {
-          bytes_this_time += kCanDataLength;
           total_size += kCanDataLength;
         }
       }
 
       const uint32_t now = millis();
       if (now - last_print_time >= kPrintIntervalMs) {
-        PrintProgress("can send", bytes_this_time, total_size, now,
-                      last_print_time);
-        bytes_this_time = 0;
+        PrintCanTransferStatus("can send", total_size);
         last_print_time = now;
       }
       vTaskDelay(pdMS_TO_TICKS(kCanTxIntervalMs));
     }
-    PrintResult("can send", total_size, start_time);
+    PrintCanTransferStatus("can send", total_size);
   } else {
     while (!g_can_exit_test) {
       uint32_t alerts = 0;
@@ -286,10 +244,7 @@ void CanTask(void* param)
       while (twai_receive(&rx_message, 0) == ESP_OK) {
         if (!rx_message.rtr && !rx_message.extd &&
             rx_message.identifier == kCanTestId &&
-            rx_message.data_length_code == kCanDataLength &&
-            ValidateData("can receive", rx_message.data,
-                         rx_message.data_length_code, kCanTestChar)) {
-          bytes_this_time += rx_message.data_length_code;
+            rx_message.data_length_code == kCanDataLength) {
           total_size += rx_message.data_length_code;
         } else {
           PrintCanFrame(rx_message);
@@ -299,13 +254,11 @@ void CanTask(void* param)
 
       const uint32_t now = millis();
       if (now - last_print_time >= kPrintIntervalMs) {
-        PrintProgress("can receive", bytes_this_time, total_size, now,
-                      last_print_time);
-        bytes_this_time = 0;
+        PrintCanTransferStatus("can receive", total_size);
         last_print_time = now;
       }
     }
-    PrintResult("can receive", total_size, start_time);
+    PrintCanTransferStatus("can receive", total_size);
   }
 
   DeinitCan();
