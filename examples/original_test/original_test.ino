@@ -2,7 +2,7 @@
  * @Description: original_test
  * @Author: LILYGO_L
  * @Date: 2024-11-07 10:04:14
- * @LastEditTime: 2026-06-02 17:07:12
+ * @LastEditTime: 2026-07-16 16:04:39
  * @License: GPL 3.0
  */
 
@@ -20,21 +20,26 @@
 #include <SPI.h>
 #include "WiFi.h"
 #include <WebServer.h>
+#include <esp_mac.h>
 #include <time.h>
 
 // Intervall:
 #define POLLING_RATE_MS 100
 
-// #define WIFI_SSID "xinyuandianzi"
-// #define WIFI_PASSWORD "AA15994823428"
-#define WIFI_SSID "LilyGo-AABB"
-#define WIFI_PASSWORD "xinyuandianzi"
+#define WIFI_SSID_1 "LilyGo-AABB"
+#define WIFI_PASSWORD_1 "xinyuandianzi"
+#define WIFI_SSID_2 "xinyuandianzi"
+#define WIFI_PASSWORD_2 "AA15994823428"
 
-#define WIFI_CONNECT_WAIT_MAX 5000
-#define WIFI_TIME_SYNC_WAIT_MAX 10000
+#define WIFI_CONNECT_WAIT_MAX 40000UL
+#define WIFI_NETWORK_SWITCH_INTERVAL 10000UL
+#define WIFI_CONNECT_POLL_INTERVAL 50UL
+#define WIFI_CONNECT_LOG_INTERVAL 500UL
+#define WIFI_TIME_SYNC_WAIT_MAX 40000UL
+#define WIFI_TIME_SYNC_POLL_TIMEOUT 500UL
 #define WIFI_TIME_ZONE_OFFSET_SEC (8 * 60 * 60)
 #define WIFI_DAYLIGHT_OFFSET_SEC 0
-#define WIFI_AP_SSID "T-2Can_Log"
+#define WIFI_AP_SSID_PREFIX "T-2Can_"
 #define WIFI_AP_PASSWORD "12345678"
 #define WIFI_AP_CHANNEL 1
 #define WIFI_AP_MAX_CONNECTIONS 4
@@ -48,7 +53,7 @@
 #endif
 
 #define SOFTWARE_NAME "Original_Test"
-#define SOFTWARE_LASTEDITTIME "202606011017"
+#define SOFTWARE_LASTEDITTIME "202607161604"
 #define BOARD_VERSION "V1.0"
 
 size_t CycleTime = 0;
@@ -59,8 +64,22 @@ bool Can_A_B_Send_Flag = true;
 
 static bool Wifi_Connection_Flag = false;
 static bool Wifi_AP_Flag = false;
+static char Wifi_AP_SSID[sizeof(WIFI_AP_SSID_PREFIX) + 12];
 static String Web_Log_Buffer;
 WebServer Http_Server(80);
+
+struct WifiNetworkCredential
+{
+    const char *ssid;
+    const char *password;
+};
+
+static const WifiNetworkCredential Wifi_Networks[] = {
+    {WIFI_SSID_1, WIFI_PASSWORD_1},
+    {WIFI_SSID_2, WIFI_PASSWORD_2},
+};
+
+static const size_t WIFI_NETWORK_COUNT = sizeof(Wifi_Networks) / sizeof(Wifi_Networks[0]);
 
 void AppLogPrint(const String &message);
 template <typename T>
@@ -208,10 +227,34 @@ void HandleClearLog()
     Http_Server.send(302, "text/plain", "");
 }
 
+void BuildWifiAPSSID(void)
+{
+    uint8_t factory_mac[6] = {0};
+    esp_err_t result = esp_efuse_mac_get_default(factory_mac);
+    if (result != ESP_OK)
+    {
+        AppLogPrintf("Failed to read factory MAC: %d\n", result);
+    }
+
+    snprintf(Wifi_AP_SSID, sizeof(Wifi_AP_SSID),
+             WIFI_AP_SSID_PREFIX "%02X%02X%02X%02X%02X%02X",
+             factory_mac[0], factory_mac[1], factory_mac[2],
+             factory_mac[3], factory_mac[4], factory_mac[5]);
+}
+
 void Wifi_AP_HTTP_Init(void)
 {
+    WiFi.persistent(false);
     WiFi.mode(WIFI_AP_STA);
-    Wifi_AP_Flag = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CONNECTIONS);
+    WiFi.setAutoReconnect(true);
+    WiFi.setSleep(false);
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);
+    WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+    WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+
+    BuildWifiAPSSID();
+    Wifi_AP_Flag = WiFi.softAP(Wifi_AP_SSID, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CONNECTIONS);
 
     Http_Server.on("/", HTTP_GET, HandleRoot);
     Http_Server.on("/log", HTTP_GET, HandleLogText);
@@ -220,7 +263,7 @@ void Wifi_AP_HTTP_Init(void)
 
     IPAddress ip = WiFi.softAPIP();
     AppLogPrintf("WiFi AP %s\n", Wifi_AP_Flag ? "started" : "start failed");
-    AppLogPrintf("AP SSID: %s\n", WIFI_AP_SSID);
+    AppLogPrintf("AP SSID: %s\n", Wifi_AP_SSID);
     AppLogPrintf("AP password: %s\n", WIFI_AP_PASSWORD);
     AppLogPrintf("HTTP log URL: http://%s/\n", ip.toString().c_str());
 }
@@ -355,52 +398,61 @@ void Wifi_STA_Test(void)
     }
 
     AppLogPrintln(text);
+    WiFi.scanDelete();
 
-    delay(3000);
-    text.clear();
+    size_t network_index = 0;
+    uint32_t start_tick = millis();
+    uint32_t next_switch_tick = WIFI_NETWORK_SWITCH_INTERVAL;
+    uint32_t last_log_tick = start_tick;
 
-    text = "Connecting to ";
-    AppLogPrint("Connecting to ");
-    text += WIFI_SSID;
-    text += "\n";
-
-    AppLogPrint(WIFI_SSID);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-    uint32_t last_tick = millis();
+    Wifi_Connection_Flag = false;
+    AppLogPrintf("Connecting to %s", Wifi_Networks[network_index].ssid);
+    WiFi.begin(Wifi_Networks[network_index].ssid, Wifi_Networks[network_index].password);
 
     while (WiFi.status() != WL_CONNECTED)
     {
         Http_Server.handleClient();
-        AppLogPrint(".");
-        text += ".";
-        delay(100);
+        uint32_t now = millis();
+        uint32_t elapsed = now - start_tick;
 
-        if (millis() - last_tick > WIFI_CONNECT_WAIT_MAX)
+        if (elapsed >= WIFI_CONNECT_WAIT_MAX)
         {
-            Wifi_Connection_Flag = false;
             break;
         }
-        else
+
+        if (elapsed >= next_switch_tick)
         {
-            Wifi_Connection_Flag = true;
+            network_index = (network_index + 1) % WIFI_NETWORK_COUNT;
+            AppLogPrintf("\nSwitching to %s", Wifi_Networks[network_index].ssid);
+            WiFi.begin(Wifi_Networks[network_index].ssid, Wifi_Networks[network_index].password);
+            next_switch_tick += WIFI_NETWORK_SWITCH_INTERVAL;
+            last_log_tick = now;
         }
+
+        if (now - last_log_tick >= WIFI_CONNECT_LOG_INTERVAL)
+        {
+            AppLogPrint(".");
+            last_log_tick = now;
+        }
+
+        delay(WIFI_CONNECT_POLL_INTERVAL);
     }
+
+    Wifi_Connection_Flag = (WiFi.status() == WL_CONNECTED);
 
     if (Wifi_Connection_Flag == true)
     {
-        text += "\nThe connection was successful ! \nTakes ";
         AppLogPrint("\nThe connection was successful ! \nTakes ");
-
-        text += millis() - last_tick;
-        AppLogPrint(millis() - last_tick);
-
-        text += " ms\n";
+        AppLogPrint(millis() - start_tick);
         AppLogPrintln(" ms\n");
+        AppLogPrintf("Connected SSID: %s\n", WiFi.SSID().c_str());
+        AppLogPrintf("STA IP: %s\n", WiFi.localIP().toString().c_str());
+        AppLogPrintf("RSSI: %d dBm\n", WiFi.RSSI());
     }
     else
     {
-        AppLogPrintf("\nWifi test error!\n");
+        AppLogPrintf("\nWifi test error after %lu ms (status: %d)\n",
+                     millis() - start_tick, WiFi.status());
     }
 }
 
@@ -416,18 +468,32 @@ void WIFI_Time_Test(void)
     configTime(WIFI_TIME_ZONE_OFFSET_SEC, WIFI_DAYLIGHT_OFFSET_SEC,
                "pool.ntp.org", "time.nist.gov", "ntp.aliyun.com");
 
-    struct tm timeinfo;
+    struct tm timeinfo = {};
     uint32_t start_tick = millis();
-    while (!getLocalTime(&timeinfo))
+    bool time_sync_success = false;
+
+    while (millis() - start_tick < WIFI_TIME_SYNC_WAIT_MAX)
     {
-        Http_Server.handleClient();
-        if (millis() - start_tick > WIFI_TIME_SYNC_WAIT_MAX)
+        uint32_t elapsed = millis() - start_tick;
+        uint32_t remaining = WIFI_TIME_SYNC_WAIT_MAX - elapsed;
+        uint32_t poll_timeout = remaining < WIFI_TIME_SYNC_POLL_TIMEOUT
+                                    ? remaining
+                                    : WIFI_TIME_SYNC_POLL_TIMEOUT;
+
+        if (getLocalTime(&timeinfo, poll_timeout))
         {
-            AppLogPrintln("NTP time sync failed");
-            return;
+            time_sync_success = true;
+            break;
         }
+
+        Http_Server.handleClient();
         AppLogPrint(".");
-        delay(500);
+    }
+
+    if (!time_sync_success)
+    {
+        AppLogPrintf("\nNTP time sync failed after %lu ms\n", millis() - start_tick);
+        return;
     }
 
     AppLogPrintln();

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Merge existing PlatformIO ESP32 build outputs into one 0x0 flash image.
 
-This script reads the existing .pio/build/<env>/idedata.json file and calls
-esptool. It does not invoke platformio, so it will not trigger a project build.
+This script reads the .pio/build/<env>/idedata.json file and calls esptool.
+If the metadata file is missing, it invokes PlatformIO's lightweight idedata
+target to create it without rebuilding the firmware.
 
 Default output name format: [firmware-source]_firmware_<YYYYmmddHHMM>.bin.
 """
@@ -14,6 +15,7 @@ import configparser
 import json
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -117,6 +119,73 @@ def load_json(path: Path, *, required: bool = True) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise SystemExit(f"Invalid {path}: expected a JSON object.")
     return data
+
+
+def find_platformio_executable() -> Path | None:
+    for command in ("platformio", "pio"):
+        executable = shutil.which(command)
+        if executable:
+            return Path(executable).resolve()
+
+    penv_dir = Path.home() / ".platformio" / "penv"
+    candidates = (
+        Path(sys.executable).with_name("platformio.exe"),
+        Path(sys.executable).with_name("pio.exe"),
+        Path(sys.executable).with_name("platformio"),
+        Path(sys.executable).with_name("pio"),
+        penv_dir / "Scripts" / "platformio.exe",
+        penv_dir / "Scripts" / "pio.exe",
+        penv_dir / "bin" / "platformio",
+        penv_dir / "bin" / "pio",
+    )
+    return next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
+
+
+def load_or_generate_idedata(build_dir: Path, environment: str) -> dict[str, Any]:
+    idedata_path = build_dir / "idedata.json"
+    if idedata_path.is_file():
+        return load_json(idedata_path)
+
+    platformio = find_platformio_executable()
+    if platformio is None:
+        raise SystemExit(
+            f"Missing {idedata_path} and PlatformIO Core was not found. "
+            f"Run 'pio run -e {environment} -t idedata' before merging firmware."
+        )
+
+    command = [
+        str(platformio),
+        "run",
+        "-d",
+        str(PROJECT_DIR),
+        "-e",
+        environment,
+        "-t",
+        "idedata",
+    ]
+    print(f"Missing {idedata_path}; generating PlatformIO metadata...")
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        details = result.stdout.strip()
+        message = "Failed to generate PlatformIO metadata."
+        if details:
+            message += f"\n{details}"
+        raise SystemExit(message)
+
+    if not idedata_path.is_file():
+        raise SystemExit(
+            f"PlatformIO completed without creating {idedata_path}. "
+            f"Run 'pio run -e {environment} -t idedata' manually."
+        )
+
+    return load_json(idedata_path)
 
 
 def load_platformio_config() -> configparser.ConfigParser:
@@ -401,7 +470,7 @@ def main() -> int:
     if args.environment is None:
         environment = build_dir.name
 
-    idedata = load_json(build_dir / "idedata.json")
+    idedata = load_or_generate_idedata(build_dir, environment)
     env_options = environment_options(config, environment)
 
     board_name = strip_inline_comment(env_options.get("board", ""))
