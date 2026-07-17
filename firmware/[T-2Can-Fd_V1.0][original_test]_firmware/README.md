@@ -1,5 +1,11 @@
 # Firmware Modification Log
 
+## 202607170958
+### Changed firmware
+- `[T-2Can-Fd_V1.0][original_test]_firmware_202607170958`
+### Change content
+- 修改串口输出模式为uart
+
 ## 202607161625
 ### Changed firmware
 - `[T-2Can-Fd_V1.0][original_test]_firmware_202607161625`
