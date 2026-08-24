@@ -552,7 +552,7 @@ void setup()
     Can_A.setBitrate(CAN_500KBPS);
     Can_A.setNormalMode();
 
-    AppLogPrintln("can a speed: 1000kbps");
+    AppLogPrintln("can a speed: 500kbps");
 
 #elif defined T_2Can_Fd
     memset(Can_Send_Package, 'A', MAX_DATA_SIZE);
