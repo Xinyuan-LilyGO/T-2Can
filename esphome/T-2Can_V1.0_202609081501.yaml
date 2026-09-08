@@ -1,16 +1,19 @@
+# 已验证版本：ESPHome 2026.8.2。
+# GPIO 初始化后，先将 MCP2515 RESET 拉低 10ms，再拉高并等待 10ms，最后初始化 CAN。
 esphome:
-  name: can
-  # 在系统启动时执行硬件复位逻辑
+  name: t-2can-v1-0-202609081501
+  friendly_name: "T-2Can_V1.0_202609081501"
   on_boot:
-    priority: 800.0 # 极高优先级，在所有传感器初始化前执行
+    priority: 700.0
     then:
-      - logger.log: "Resetting MCP2515..."
-      - output.turn_on: mcp_rst_pin  # 拉高
-      - delay: 100ms
-      - output.turn_off: mcp_rst_pin # 拉低
-      - delay: 100ms
-      - output.turn_on: mcp_rst_pin  # 恢复高电平
-      - delay: 100ms
+      # 使用同步延时，确保复位完成后再初始化 CAN。
+      - lambda: |-
+          ESP_LOGI("mcp_reset", "Resetting MCP2515 before CAN setup");
+          id(mcp_rst_pin).turn_off();
+          esphome::delay(10);
+          id(mcp_rst_pin).turn_on();
+          esphome::delay(10);
+          ESP_LOGI("mcp_reset", "MCP2515 reset released");
 
 esp32:
   board: esp32-s3-devkitm-1
