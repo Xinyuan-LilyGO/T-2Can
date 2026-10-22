@@ -48,6 +48,37 @@ mcp2518fd Can_A(MCP2518_CS);
 #error "no macro definition is set"
 #endif
 
+// Read-only diagnostics; a failed check must not stop setup or loop.
+#if defined T_2Can
+uint8_t MCP2515_Read_Register(uint8_t address)
+{
+    SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(MCP2515_CS, LOW);
+    SPI.transfer(0x03); // MCP2515 READ instruction
+    SPI.transfer(address);
+    uint8_t value = SPI.transfer(0x00);
+    digitalWrite(MCP2515_CS, HIGH);
+    SPI.endTransaction();
+    return value;
+}
+#elif defined T_2Can_Fd
+uint32_t MCP2518_Read_Register(uint16_t address)
+{
+    SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(MCP2518_CS, LOW);
+    SPI.transfer((cINSTRUCTION_READ << 4) | ((address >> 8) & 0x0F));
+    SPI.transfer(address & 0xFF);
+    uint32_t value = 0;
+    for (uint8_t i = 0; i < 4; ++i)
+    {
+        value |= (uint32_t)SPI.transfer(0x00) << (8 * i);
+    }
+    digitalWrite(MCP2518_CS, HIGH);
+    SPI.endTransaction();
+    return value;
+}
+#endif
+
 void Can_B_Drive_Initialization()
 {
     // Initialize configuration structures using macro initializers
@@ -171,11 +202,27 @@ void setup()
 
     SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS); // SPI boots
 
-    Can_A.reset();
-    Can_A.setBitrate(CAN_500KBPS);
-    Can_A.setNormalMode();
+    Serial.printf("[CAN A][MCP2515] Initialization starting (CS=%d, SCLK=%d, MISO=%d, MOSI=%d)\n",
+               MCP2515_CS, MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI);
+    MCP2515::ERROR reset_result = Can_A.reset();
+    uint8_t config_status = MCP2515_Read_Register(0x0E); // CANSTAT: OPMOD must be configuration mode
+    bool chip_ok = reset_result == MCP2515::ERROR_OK && (config_status & 0xE0) == 0x80;
+    Serial.printf("[CAN A][MCP2515] Reset: %s (code=%d)\n",
+               reset_result == MCP2515::ERROR_OK ? "OK" : "FAIL", (int)reset_result);
+    Serial.printf("[CAN A][MCP2515] Chip/SPI check: %s (CANSTAT=0x%02X, expected OPMOD=0x80)\n",
+               chip_ok ? "OK" : "FAIL", (unsigned int)config_status);
 
-    Serial.println("can a speed: 1000kbps");
+    MCP2515::ERROR bitrate_result = Can_A.setBitrate(CAN_500KBPS);
+    Serial.printf("[CAN A][MCP2515] Set bitrate 500 kbps: %s (code=%d)\n",
+               bitrate_result == MCP2515::ERROR_OK ? "OK" : "FAIL", (int)bitrate_result);
+    MCP2515::ERROR mode_result = Can_A.setNormalMode();
+    Serial.printf("[CAN A][MCP2515] Set normal mode: %s (code=%d)\n",
+               mode_result == MCP2515::ERROR_OK ? "OK" : "FAIL", (int)mode_result);
+    bool init_ok = chip_ok && bitrate_result == MCP2515::ERROR_OK && mode_result == MCP2515::ERROR_OK;
+    Serial.printf("[CAN A][MCP2515] Initialization %s; program continues.\n",
+               init_ok ? "SUCCESS" : "FAILED");
+
+    Serial.println("can a speed: 500kbps");
 
 #elif defined T_2Can_Fd
     memset(Can_Send_Package, 'A', MAX_DATA_SIZE);
@@ -184,22 +231,35 @@ void setup()
 
     SPI.begin(MCP2518_SCLK, MCP2518_MISO, MCP2518_MOSI, MCP2518_CS); // SPI boots
 
-    if (Can_A.begin(CAN_500K_5M) != CAN_OK)
-    {
-        Serial.println("can a fd init fail");
-    }
-    else
-    {
-        Serial.println("can a fd init success");
-    }
-
-    Serial.println("can a fd speed: 5000kbps");
+    Serial.printf("[CAN A][MCP2518FD] Initialization starting (CS=%d, SCLK=%d, MISO=%d, MOSI=%d)\n",
+               MCP2518_CS, MCP2518_SCLK, MCP2518_MISO, MCP2518_MOSI);
+    uint8_t begin_result = Can_A.begin(CAN_500K_5M);
+    // This driver's begin() always returns CAN_OK, so also verify hardware readback.
+    uint32_t control = MCP2518_Read_Register(cREGADDR_CiCON);
+    uint32_t nominal_timing = MCP2518_Read_Register(cREGADDR_CiNBTCFG);
+    uint32_t device_id = MCP2518_Read_Register(cREGADDR_DEVID);
+    bool device_id_ok = device_id != 0 && device_id != 0xFFFFFFFFUL;
+    bool chip_ok = device_id_ok && control != 0 && control != 0xFFFFFFFFUL &&
+                   nominal_timing != 0 && nominal_timing != 0xFFFFFFFFUL;
+    uint8_t actual_mode = (control >> 21) & 0x07; // CiCON.OPMOD
+    Serial.printf("[CAN A][MCP2518FD] Driver begin: %s (code=%u)\n",
+               begin_result == CAN_OK ? "OK" : "FAIL", (unsigned int)begin_result);
+    Serial.printf("[CAN A][MCP2518FD] Chip/SPI check: %s (CiCON=0x%08lX, CiNBTCFG=0x%08lX, DEVID=0x%08lX)\n",
+               chip_ok ? "OK" : "FAIL", (unsigned long)control,
+               (unsigned long)nominal_timing, (unsigned long)device_id);
+    Serial.printf("[CAN A][MCP2518FD] Normal mode check: %s (OPMOD=%u, expected=%u)\n",
+               chip_ok && actual_mode == CAN_NORMAL_MODE ? "OK" : "FAIL",
+               (unsigned int)actual_mode, (unsigned int)CAN_NORMAL_MODE);
+    bool init_ok = begin_result == CAN_OK && chip_ok && actual_mode == CAN_NORMAL_MODE;
+    Serial.printf("[CAN A][MCP2518FD] Initialization %s; program continues.\n",
+               init_ok ? "SUCCESS" : "FAILED");
+    Serial.printf("can a fd configured speed: arbitration 500kbps, data 5000kbps\n");
 #else
 #error "no macro definition is set"
 #endif
 
     Can_B_Drive_Initialization();
-    Serial.println("can b speed: 1000kbps");
+    Serial.println("can b speed: 500kbps");
 }
 
 void loop()
